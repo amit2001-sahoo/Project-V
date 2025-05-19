@@ -7,7 +7,7 @@ from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from status_maintain.utility import UserType, AttendanceStatus
-from .models import User, Attendance, UserProfile
+from .models import User, Attendance, UserProfile, VendorShopImage
 from .storage import AzureBlobStorage
 
 
@@ -82,6 +82,9 @@ class UserSerializer(serializers.ModelSerializer):
         return None
 
 class UserProfileSerializer(serializers.ModelSerializer):
+    shop_images = serializers.ListField(
+        child=serializers.FileField(), required=False, allow_empty=True
+    )
     profile_picture = serializers.FileField(required=False, allow_null=True, allow_empty_file=True)
     first_name = serializers.CharField(max_length=15, required=False, allow_null=True, allow_blank=True)
     last_name = serializers.CharField(max_length=15, required=False, allow_null=True, allow_blank=True)
@@ -96,7 +99,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
         fields = (
             'id', 'first_name', 'last_name', 'phone_number', 'business_name', 'gender',
             'address', 'shop_address', 'shop_description',
-            'profile_picture', 'opening_time', 'closing_time',
+            'profile_picture','shop_images', 'opening_time', 'closing_time',
             'created_on', 'created_by', 'modified_on', 'modified_by'
         )
         read_only_fields = ('id', 'created_on', 'created_by', 'modified_on', 'modified_by')
@@ -116,16 +119,23 @@ class UserProfileSerializer(serializers.ModelSerializer):
         return data
 
     @staticmethod
-    def _generate_file_name(file_name, doc_unique_id):
+    def _generate_file_name(file_name, unique_suffix):
         current_datetime = datetime.now()
         datetime_string = current_datetime.strftime("%Y%m%d_%H%M%S")
         _, file_extension = os.path.splitext(file_name)
-        new_file_name = f"{datetime_string}_{doc_unique_id}{file_extension.lower()}"
-        return new_file_name
+        return f"{datetime_string}_{unique_suffix}{file_extension.lower()}"
 
     def upload_profile_in_blob(self, uploaded_file, file_name):
         new_file_name = self._generate_file_name(file_name, uuid4())
         blob_path = f"user_profiles/{new_file_name}"
+        azure_storage = AzureBlobStorage()
+        file_data = uploaded_file.read()
+        azure_storage.upload_file(file_content=file_data, blob_name=blob_path)
+        return blob_path
+
+    def upload_shop_image_in_blob(self, uploaded_file, file_name, index):
+        new_file_name = self._generate_file_name(file_name, f"{uuid4()}_{index}")
+        blob_path = f"shop_images/{new_file_name}"
         azure_storage = AzureBlobStorage()
         file_data = uploaded_file.read()
         azure_storage.upload_file(file_content=file_data, blob_name=blob_path)
@@ -141,10 +151,18 @@ class UserProfileSerializer(serializers.ModelSerializer):
             setattr(user, attr, value)
         user.save()
 
-        uploaded_file = validated_data.pop('profile_picture', None)
-        if uploaded_file:
-            filename = self.upload_profile_in_blob(uploaded_file, uploaded_file.name)
-            instance.profile_picture = filename
+        uploaded_profile = validated_data.pop('profile_picture', None)
+        if uploaded_profile:
+            path = self.upload_profile_in_blob(uploaded_profile, uploaded_profile.name)
+            instance.profile_picture = path
+
+        uploaded_shop_images = validated_data.pop('shop_images', None)
+        if uploaded_shop_images is not None:
+            VendorShopImage.objects.filter(vendor=user).delete()
+
+            for idx, image in enumerate(uploaded_shop_images):
+                path = self.upload_shop_image_in_blob(image, image.name, idx)
+                VendorShopImage.objects.create(vendor=user, shop_image=path)
 
         for field in ['opening_time', 'closing_time']:
             if field in validated_data and not validated_data[field]:
@@ -157,6 +175,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
         return instance
 
 class UserProfileReadSerializer(serializers.ModelSerializer):
+    shop_images = serializers.SerializerMethodField()
     profile_picture = serializers.SerializerMethodField()
     first_name = serializers.CharField(source='user.first_name')
     last_name = serializers.CharField(source='user.last_name')
@@ -169,7 +188,7 @@ class UserProfileReadSerializer(serializers.ModelSerializer):
         fields = (
             'id', 'first_name', 'last_name', 'phone_number', 'business_name', 'gender',
             'address', 'shop_address', 'shop_description',
-            'profile_picture', 'opening_time', 'closing_time',
+            'profile_picture','shop_images', 'opening_time', 'closing_time',
             'created_on', 'created_by', 'modified_on', 'modified_by'
         )
 
@@ -179,6 +198,15 @@ class UserProfileReadSerializer(serializers.ModelSerializer):
             azure_storage = AzureBlobStorage()
             return azure_storage.get_file_url(blob_name=obj.profile_picture)
         return None
+
+    @extend_schema_field(serializers.ListField(child=serializers.URLField()))
+    def get_shop_images(self, obj):
+        azure_storage = AzureBlobStorage()
+        shop_images = obj.user.shop_images.all()
+        return [
+            azure_storage.get_file_url(blob_name=image.shop_image)
+            for image in shop_images if image.shop_image
+        ]
 
 class AttendanceSerializer(serializers.ModelSerializer):
     class Meta:

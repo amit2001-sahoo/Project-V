@@ -86,6 +86,15 @@ class UserProfile(BaseUserModel):
         verbose_name = "User Profile"
         verbose_name_plural = "User Profiles"
 
+class VendorShopImage(BaseUserModel):
+    vendor = models.ForeignKey(User, on_delete=models.CASCADE, related_name='shop_images', db_column='VENDOR_ID')
+    shop_image = models.CharField(max_length=500, blank=True, null=True, db_column='SHOP_IMAGE')
+
+    class Meta:
+        db_table = "VENDOR_SHOP_IMAGE"
+        verbose_name = "Vendor Shop Image"
+        verbose_name_plural = "Vendor Shop Images"
+
 class Attendance(BaseUserModel):
     vendor = models.ForeignKey(User, on_delete=models.CASCADE, related_name='attendances', db_column='VENDOR_ID')
     date = models.DateField(auto_now_add=True, db_column='DATE')
