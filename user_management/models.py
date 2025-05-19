@@ -86,7 +86,6 @@ class UserProfile(BaseUserModel):
         verbose_name = "User Profile"
         verbose_name_plural = "User Profiles"
 
-
 class Attendance(BaseUserModel):
     vendor = models.ForeignKey(User, on_delete=models.CASCADE, related_name='attendances', db_column='VENDOR_ID')
     date = models.DateField(auto_now_add=True, db_column='DATE')

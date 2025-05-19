@@ -1,13 +1,15 @@
 from datetime import datetime, timezone
 from django.db.models import OuterRef, Subquery, IntegerField, Value, When, Case
+from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from rest_framework import status
 from django.contrib.auth import logout
 from status_maintain.utility import UserType, AttendanceStatus
 from .models import Attendance, User, UserProfile
-from .serializers import (RegisterSerializer, LoginSerializer, UserSerializer, UserProfileSerializer,
-                          AttendanceSerializer, AutoCloseAttendanceSerializer, LogoutSerializer, OpenShopSerializer)
+from .serializers import (RegisterSerializer, LoginSerializer, UserProfileSerializer,
+                          AttendanceSerializer, AutoCloseAttendanceSerializer, LogoutSerializer, OpenShopSerializer,
+                          UserProfileReadSerializer)
 from drf_spectacular.utils import extend_schema
 from rest_framework.generics import GenericAPIView
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -61,34 +63,33 @@ class LogoutView(GenericAPIView):
 class UserProfileAPIView(GenericAPIView):
     serializer_class = UserProfileSerializer
     permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
 
     def get_object(self):
         profile, created = UserProfile.objects.get_or_create(user=self.request.user)
         return profile
 
-    @extend_schema(responses={200: UserProfileSerializer})
+    @extend_schema(responses={200: UserProfileReadSerializer})
     def get(self, request):
         profile = self.get_object()
-        serializer = self.get_serializer(profile, context={'request': request})
+        serializer = UserProfileReadSerializer(profile, context={'request': request})
         return Response(serializer.data)
+
+    def update_profile(self, request, partial=False):
+        profile = self.get_object()
+        serializer = self.get_serializer(profile, data=request.data, partial=partial, context={'request': request})
+        if serializer.is_valid():
+            serializer.save(modified_by=request.user.id, modified_on=datetime.now(timezone.utc))
+            return Response(UserProfileReadSerializer(profile, context={'request': request}).data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     @extend_schema(request=UserProfileSerializer, responses={200: UserProfileSerializer})
     def put(self, request):
-        profile = self.get_object()
-        serializer = self.get_serializer(profile, data=request.data, partial=False, context={'request': request})
-        if serializer.is_valid():
-            serializer.save(modifed_by=request.user.id, modified_on=datetime.now(timezone.utc))
-            return Response(serializer.data)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        return self.update_profile(request, partial=False)
 
     @extend_schema(request=UserProfileSerializer, responses={200: UserProfileSerializer})
     def patch(self, request):
-        profile = self.get_object()
-        serializer = self.get_serializer(profile, data=request.data, partial=True, context={'request': request})
-        if serializer.is_valid():
-            serializer.save(modifed_by=request.user.id, modified_on=datetime.now(timezone.utc))
-            return Response(serializer.data)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        return self.update_profile(request, partial=True)
 
 
 class MarkAttendanceAPIView(GenericAPIView):

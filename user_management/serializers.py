@@ -1,9 +1,14 @@
+import os
+from datetime import datetime
+from uuid import uuid4
+
 from django.contrib.auth import authenticate
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from status_maintain.utility import UserType, AttendanceStatus
 from .models import User, Attendance, UserProfile
+from .storage import AzureBlobStorage
 
 
 class RegisterSerializer(serializers.ModelSerializer):
@@ -26,6 +31,11 @@ class RegisterSerializer(serializers.ModelSerializer):
             for field in ['business_name', 'shop_address', 'shop_description']:
                 if data.get(field):
                     raise serializers.ValidationError(f"Only vendors can set {field}.")
+        opening = data.get("opening_time")
+        closing = data.get("closing_time")
+        if opening and closing and closing <= opening:
+            raise serializers.ValidationError("Closing time must be after opening time.")
+
         return data
 
     def create(self, validated_data):
@@ -71,19 +81,24 @@ class UserSerializer(serializers.ModelSerializer):
             return UserType.get_enum_name(obj.user_type)
         return None
 
-
 class UserProfileSerializer(serializers.ModelSerializer):
+    profile_picture = serializers.FileField(required=False, allow_null=True, allow_empty_file=True)
     first_name = serializers.CharField(max_length=15, required=False, allow_null=True, allow_blank=True)
     last_name = serializers.CharField(max_length=15, required=False, allow_null=True, allow_blank=True)
     phone_number = serializers.CharField(max_length=15, required=False, allow_null=True, allow_blank=True)
     business_name = serializers.CharField(max_length=100, required=False, allow_null=True, allow_blank=True)
     gender = serializers.CharField(max_length=50, required=False, allow_null=True, allow_blank=True)
+    opening_time = serializers.TimeField(allow_null=True,required=False)
+    closing_time = serializers.TimeField(allow_null=True,required=False)
 
     class Meta:
         model = UserProfile
-        fields = ('id', 'first_name', 'last_name', 'phone_number', 'business_name', 'gender', 'address', 'shop_address',
-                  'shop_description', 'profile_picture', 'opening_time', 'closing_time', 'created_on', 'created_by',
-                  'modified_on', 'modified_by')
+        fields = (
+            'id', 'first_name', 'last_name', 'phone_number', 'business_name', 'gender',
+            'address', 'shop_address', 'shop_description',
+            'profile_picture', 'opening_time', 'closing_time',
+            'created_on', 'created_by', 'modified_on', 'modified_by'
+        )
         read_only_fields = ('id', 'created_on', 'created_by', 'modified_on', 'modified_by')
 
     def validate(self, data):
@@ -92,36 +107,78 @@ class UserProfileSerializer(serializers.ModelSerializer):
             for field in ['business_name', 'shop_address', 'shop_description']:
                 if field in data and data[field]:
                     raise serializers.ValidationError(f"Only vendors can set {field}.")
+
+        opening = data.get("opening_time")
+        closing = data.get("closing_time")
+        if opening and closing and closing <= opening:
+            raise serializers.ValidationError("Closing time must be after opening time.")
+
         return data
 
-    def to_representation(self, instance):
-        representation = super().to_representation(instance)
-        user = instance.user
-        representation['first_name'] = user.first_name
-        representation['last_name'] = user.last_name
-        representation['phone_number'] = user.phone_number
-        representation['business_name'] = user.business_name
-        representation['gender'] = getattr(user, 'gender', None)  # Assuming gender is on User
-        return representation
+    @staticmethod
+    def _generate_file_name(file_name, doc_unique_id):
+        current_datetime = datetime.now()
+        datetime_string = current_datetime.strftime("%Y%m%d_%H%M%S")
+        _, file_extension = os.path.splitext(file_name)
+        new_file_name = f"{datetime_string}_{doc_unique_id}{file_extension.lower()}"
+        return new_file_name
+
+    def upload_profile_in_blob(self, uploaded_file, file_name):
+        new_file_name = self._generate_file_name(file_name, uuid4())
+        blob_path = f"user_profiles/{new_file_name}"
+        azure_storage = AzureBlobStorage()
+        file_data = uploaded_file.read()
+        azure_storage.upload_file(file_content=file_data, blob_name=blob_path)
+        return blob_path
 
     def update(self, instance, validated_data):
-        user_data = {key: validated_data.pop(key) for key in
-                     ['first_name', 'last_name', 'phone_number', 'business_name', 'gender'] if key in validated_data}
+        user_data = {key: validated_data.pop(key) for key in [
+            'first_name', 'last_name', 'phone_number', 'business_name', 'gender'
+        ] if key in validated_data}
+
         user = instance.user
         for attr, value in user_data.items():
             setattr(user, attr, value)
         user.save()
 
+        uploaded_file = validated_data.pop('profile_picture', None)
+        if uploaded_file:
+            filename = self.upload_profile_in_blob(uploaded_file, uploaded_file.name)
+            instance.profile_picture = filename
+
         for field in ['opening_time', 'closing_time']:
-            val = validated_data.get(field)
-            if not val:
+            if field in validated_data and not validated_data[field]:
                 validated_data[field] = getattr(instance, field)
 
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
+
         instance.save()
         return instance
 
+class UserProfileReadSerializer(serializers.ModelSerializer):
+    profile_picture = serializers.SerializerMethodField()
+    first_name = serializers.CharField(source='user.first_name')
+    last_name = serializers.CharField(source='user.last_name')
+    phone_number = serializers.CharField(source='user.phone_number')
+    business_name = serializers.CharField(source='user.business_name')
+    gender = serializers.CharField(source='user.gender')
+
+    class Meta:
+        model = UserProfile
+        fields = (
+            'id', 'first_name', 'last_name', 'phone_number', 'business_name', 'gender',
+            'address', 'shop_address', 'shop_description',
+            'profile_picture', 'opening_time', 'closing_time',
+            'created_on', 'created_by', 'modified_on', 'modified_by'
+        )
+
+    @extend_schema_field(serializers.URLField())
+    def get_profile_picture(self, obj):
+        if obj.profile_picture:
+            azure_storage = AzureBlobStorage()
+            return azure_storage.get_file_url(blob_name=obj.profile_picture)
+        return None
 
 class AttendanceSerializer(serializers.ModelSerializer):
     class Meta:
