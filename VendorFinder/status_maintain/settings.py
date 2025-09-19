@@ -1,9 +1,10 @@
 from pathlib import Path
 from datetime import timedelta
+from decouple import config
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = 'django-insecure-w3)yr%_+&tn+x5^0%_8z%0ivdw-^l9t_c_p*$2b)79l)#lcz0@'
+SECRET_KEY = config("SECRET_KEY")
 
 DEBUG = True
 
@@ -101,8 +102,15 @@ SIMPLE_JWT = {
 
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'ENGINE': config('DB_ENGINE'),
+        'NAME': config('DB_NAME'),
+        'USER': config('DB_USER'),
+        'PASSWORD': config('DB_PASSWORD'),
+        'HOST': config('DB_HOST'),
+        'PORT': config('DB_PORT'),
+        "OPTIONS": {
+            "driver": config("DB_DRIVER"),
+        },
     }
 }
 
