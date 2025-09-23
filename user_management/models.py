@@ -66,7 +66,7 @@ class User(AbstractBaseUser):
         return self.email
 
     class Meta:
-        db_table = "USER"
+        db_table = "USERS"
         ordering = ['first_name']
         verbose_name = "User"
         verbose_name_plural = "Users"

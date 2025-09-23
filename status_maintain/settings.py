@@ -110,6 +110,8 @@ DATABASES = {
         'PORT': config('DB_PORT'),
         "OPTIONS": {
             "driver": config("DB_DRIVER"),
+            "Encrypt": True,
+            "TrustServerCertificate": False,
         },
     }
 }
